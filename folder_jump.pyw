@@ -3,6 +3,8 @@ import ctypes
 import json
 import os
 import queue
+import re
+import subprocess
 import sys
 import threading
 import tkinter as tk
@@ -93,6 +95,26 @@ def save_config(cfg):
 def filter_folders(folders, text):
     words = text.lower().split()
     return [f for f in folders if all(w in f"{f['name']} {f['path']}".lower() for w in words)]
+
+
+ABS_PATH = re.compile(r"[A-Za-z]:\\|\\\\|https?://", re.I)  # C:\..., \\서버\..., 웹 주소(사내 배포 링크 등)
+URL = re.compile(r"https?://", re.I)
+
+
+def shell_path(text):
+    """탐색기 주소창의 표시 이름 경로(예: 내 PC\\cloudium 드라이브 (U:)\\폴더)를 실제 경로(U:\\폴더)로 바꾼다.
+    가상 드라이브는 주소창에 드라이브 문자 대신 이 형태로 복사된다."""
+    m = re.search(r"\(([A-Za-z]):\)(?:\\(.*))?$", text)
+    return f"{m[1]}:\\{m[2] or ''}" if m else text
+
+
+def open_in_explorer(path):
+    """이 프로그램에서 보이는 폴더는 바로 열고, 안 보이는 경로는 탐색기에 맡긴다.
+    cloudium 같은 보안 가상 드라이브는 탐색기 등 허용된 프로그램에서만 열려서 파이썬에서는 안 보인다."""
+    if URL.match(path) or os.path.isdir(path):  # 웹 주소는 기본 브라우저로 열린다
+        os.startfile(path)
+    else:
+        subprocess.Popen(["explorer.exe", path])
 
 
 def download_font():
@@ -396,8 +418,8 @@ class App:
         self.query.set(self.query.get() + " ".join(text.split("\n")).strip())
 
     def typed_dir(self):
-        typed = self.query.get().strip().strip('"')
-        return typed if typed and os.path.isdir(typed) else None
+        typed = shell_path(self.query.get().strip().strip('"'))
+        return typed if typed and (os.path.isdir(typed) or ABS_PATH.match(typed)) else None
 
     def on_query(self):
         q = self.query.get()
@@ -573,20 +595,22 @@ class App:
             self.quick_add()
             return
         path = self.typed if item["kind"] == "open" else item["sub"]
-        if not os.path.isdir(path):
+        if not (os.path.isdir(path) or ABS_PATH.match(path)):
             self.dialog(messagebox.showerror, "폴더 없음", f"폴더를 찾을 수 없어요:\n{path}", parent=self.root)
             self.focus_popup()
             return
-        os.startfile(path)
+        open_in_explorer(path)
         self.hide()
 
     def add_folder(self, path):
-        path = os.path.normpath(path)
+        path = path if URL.match(path) else os.path.normpath(path)  # normpath는 https://를 망가뜨린다
         folders = self.cfg["folders"]
         for i, f in enumerate(folders):
             if f["path"].lower() == path.lower():
                 return i
-        folders.append({"name": Path(path).name or path, "path": path})
+        p = Path(path)
+        name = path if URL.match(path) else (p.stem if p.suffix.lower() == ".lnk" else p.name) or path
+        folders.append({"name": name, "path": path})
         self.save()
         return len(folders) - 1
 

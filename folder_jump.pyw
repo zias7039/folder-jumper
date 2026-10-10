@@ -377,9 +377,12 @@ class App:
         ui = FONT if FONT in families else FALLBACK_FONT
         F = lambda family, px, bold=False: tkfont.Font(
             root, family=family, size=-self.px(px), weight="bold" if bold else "normal")
+        # 최근 문서는 Bold보다 한 단계 얇게. SemiBold가 없으면 Bold로 보인다.
+        semi = (f"{FONT} SemiBold", False) if f"{FONT} SemiBold" in families else (ui, True)
         # 작은 글씨도 Bold: GDI가 OTF를 가늘게 그려서 Regular~SemiBold는 흐려 보인다
         self.f = dict(sm=F(ui, 13, True), md=F(ui, 14, True), mdb=F(ui, 14, True), lg=F(ui, 15, True),
                       lgb=F(ui, 15, True), name=F(ui, 16, True), title=F(ui, 21, True),
+                      doc=F(semi[0], 14, semi[1]), doc_sm=F(semi[0], 13, semi[1]),
                       mono_sm=F(mono, 13), mono_md=F(mono, 14),
                       icon12=F(icon, 12), icon14=F(icon, 14), icon16=F(icon, 16), icon18=F(icon, 18))
         root.title(APP)
@@ -605,10 +608,10 @@ class App:
                 cv.text(sx + p(33), y + p(25), doc["badge"], font=f["mdb"], fill="#FFFFFF")
                 avail = W - p(20) - sx - p(60)
                 folder = Path(doc["path"]).parent.name or doc["path"]
-                cv.text(sx + p(60), y + p(16), ellipsize(f["mono_md"], doc["name"], avail), anchor="w",
-                        font=f["mono_md"], fill=c["text"])
-                cv.text(sx + p(60), y + p(35), ellipsize(f["mono_sm"], f"{time_ago(doc['ts'])} · {folder}", avail),
-                        anchor="w", font=f["mono_sm"], fill=c["sub"])
+                cv.text(sx + p(60), y + p(16), ellipsize(f["doc"], doc["name"], avail), anchor="w",
+                        font=f["doc"], fill=c["text"])
+                cv.text(sx + p(60), y + p(35), ellipsize(f["doc_sm"], f"{time_ago(doc['ts'])} · {folder}", avail),
+                        anchor="w", font=f["doc_sm"], fill=c["sub"])
                 cv.hit(f"doc:{i}", (sx + p(8), y, W - p(8), y + p(50)), lambda i=i: self.open_doc(i))
             if not nd:
                 msg = "일치하는 문서가 없어요" if self.all_docs else "최근에 연 Word·Excel 문서가 없어요"

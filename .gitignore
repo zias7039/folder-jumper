@@ -1,0 +1,10 @@
+# 개인 설정 (즐겨찾기 경로가 들어 있어요)
+settings.json
+folders.json
+fonts/
+
+# 빌드 결과물
+build/
+dist/
+*.spec
+__pycache__/

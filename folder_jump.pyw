@@ -462,7 +462,7 @@ class App:
         e.bind("<Key>", self.on_type)
         e.bind("<BackSpace>", lambda ev: self.query.set(self.query.get()[:-1]))
         e.bind("<Control-BackSpace>", lambda ev: self.query.set(""))
-        e.bind("<Control-v>", lambda ev: self.paste())
+        e.bind("<Control-KeyPress>", self.on_ctrl_key)  # Ctrl+D·Q·V·,
         e.bind("<Return>", lambda ev: self.open_selected())
         e.bind("<Escape>", lambda ev: self.query.set("") if self.query.get() else self.hide())
         e.bind("<Down>", lambda ev: self.move(1))
@@ -470,15 +470,20 @@ class App:
         e.bind("<Tab>", lambda ev: self.switch_zone("docs" if self.zone == "fav" else "fav"))
         e.bind("<Left>", lambda ev: self.switch_zone("fav"))
         e.bind("<Right>", lambda ev: self.switch_zone("docs"))
-        e.bind("<Control-d>", lambda ev: self.quick_add())
         e.bind("<F2>", lambda ev: self.start_rename())
-        e.bind("<Control-comma>", lambda ev: self.open_settings())
-        e.bind("<Control-q>", lambda ev: r.destroy())
         r.bind("<MouseWheel>", lambda ev: self.move(-1 if ev.delta > 0 else 1))
         r.bind("<FocusOut>", lambda ev: r.after(150, self.maybe_hide))
         self.query.trace_add("write", lambda *_: self.on_query())
         self.paint_widgets()
         self.on_query()
+
+    def on_ctrl_key(self, e):
+        """Ctrl 단축키는 입력된 글자 대신 키 위치(가상 키 코드)로 판단한다.
+        글자로 보면 Caps Lock이 켜졌을 때 'D'가 들어와 <Control-d>에 안 걸린다(한글 입력 상태도 마찬가지)."""
+        action = {0x44: self.quick_add, 0x51: self.root.destroy, 0x56: self.paste, 0xBC: self.open_settings}.get(e.keycode)
+        if action:
+            action()
+            return "break"
 
     def on_type(self, e):
         if e.state & 0x4 or not e.char or not e.char.isprintable():  # Ctrl 조합·특수키는 제외

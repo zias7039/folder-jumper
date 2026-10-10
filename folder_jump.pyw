@@ -605,10 +605,10 @@ class App:
                 cv.text(sx + p(33), y + p(25), doc["badge"], font=f["mdb"], fill="#FFFFFF")
                 avail = W - p(20) - sx - p(60)
                 folder = Path(doc["path"]).parent.name or doc["path"]
-                cv.text(sx + p(60), y + p(16), ellipsize(f["md"], doc["name"], avail), anchor="w",
-                        font=f["md"], fill=c["text"])
-                cv.text(sx + p(60), y + p(35), ellipsize(f["sm"], f"{time_ago(doc['ts'])} · {folder}", avail),
-                        anchor="w", font=f["sm"], fill=c["sub"])
+                cv.text(sx + p(60), y + p(16), ellipsize(f["mono_md"], doc["name"], avail), anchor="w",
+                        font=f["mono_md"], fill=c["text"])
+                cv.text(sx + p(60), y + p(35), ellipsize(f["mono_sm"], f"{time_ago(doc['ts'])} · {folder}", avail),
+                        anchor="w", font=f["mono_sm"], fill=c["sub"])
                 cv.hit(f"doc:{i}", (sx + p(8), y, W - p(8), y + p(50)), lambda i=i: self.open_doc(i))
             if not nd:
                 msg = "일치하는 문서가 없어요" if self.all_docs else "최근에 연 Word·Excel 문서가 없어요"

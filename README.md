@@ -60,7 +60,7 @@
 ## 글꼴
 
 [Pretendard](https://github.com/orioncactus/pretendard) 글꼴을 써요 (SIL Open Font License 1.1).
-PC에 설치돼 있지 않으면 처음 실행할 때 공식 저장소에서 `Pretendard-Bold.otf`(약 1.5MB) 한 개를 받아
+PC에 설치돼 있지 않으면 처음 실행할 때 공식 저장소에서 `Pretendard-Bold.otf`와 `Pretendard-SemiBold.otf`(합쳐서 약 3MB)를 받아
 `%APPDATA%\FolderJumper\fonts`에 두고, 이 프로그램 안에서만 써요. 인터넷이 없으면 맑은 고딕으로 보여요.
 
 ## 직접 빌드하기

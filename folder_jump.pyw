@@ -22,10 +22,11 @@ HERE = Path(sys.executable if FROZEN else __file__).resolve().parent
 # exe는 실행할 때마다 임시 폴더에 풀리므로 설정·폰트를 %APPDATA%에 둔다. 스크립트는 파일 옆에 둔다.
 DATA_DIR = Path(os.environ["APPDATA"]) / "FolderJumper" if FROZEN else HERE
 CONFIG_FILE = DATA_DIR / "settings.json"
-FONT_FILE = DATA_DIR / "fonts" / "Pretendard-Bold.otf"
-FONT_URLS = (  # 공식 저장소(v1.3.9) 먼저, 안 되면 jsDelivr
-    "https://raw.githubusercontent.com/orioncactus/pretendard/v1.3.9/packages/pretendard/dist/public/static/Pretendard-Bold.otf",
-    "https://cdn.jsdelivr.net/npm/pretendard@1.3.9/dist/public/static/Pretendard-Bold.otf",
+FONT_DIR = DATA_DIR / "fonts"
+FONT_FILES = {"Pretendard-Bold.otf": "Pretendard", "Pretendard-SemiBold.otf": "Pretendard SemiBold"}  # 파일: 글꼴 이름
+FONT_URLS = (  # 공식 저장소(v1.3.9) 먼저, 안 되면 jsDelivr. {name}은 파일 이름
+    "https://raw.githubusercontent.com/orioncactus/pretendard/v1.3.9/packages/pretendard/dist/public/static/{name}",
+    "https://cdn.jsdelivr.net/npm/pretendard@1.3.9/dist/public/static/{name}",
 )
 OLD_FOLDERS_FILE = DATA_DIR / "folders.json"
 RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
@@ -183,17 +184,17 @@ def time_ago(filetime):
     return f"{t.tm_mon}월 {t.tm_mday}일"
 
 
-def download_font():
-    """Pretendard Bold를 fonts 폴더에 받는다. 실패하면 False (그때는 맑은 고딕으로 보인다)."""
+def download_font(name):
+    """Pretendard 글꼴 파일 하나를 fonts 폴더에 받는다. 실패하면 False (Bold가 없으면 맑은 고딕으로 보인다)."""
     for url in FONT_URLS:
         try:
-            with urllib.request.urlopen(url, timeout=15) as r:
+            with urllib.request.urlopen(url.format(name=name), timeout=15) as r:
                 data = r.read()
         except OSError:
             continue
         if data[:4] == b"OTTO":  # OTF 파일이 맞는지 확인 (오류 페이지를 저장하지 않게)
-            FONT_FILE.parent.mkdir(parents=True, exist_ok=True)
-            FONT_FILE.write_bytes(data)
+            FONT_DIR.mkdir(parents=True, exist_ok=True)
+            (FONT_DIR / name).write_bytes(data)
             return True
     return False
 
@@ -1154,11 +1155,14 @@ def main():
         messagebox.showinfo(APP, "이미 실행 중이에요.\n설정한 단축키로 창을 열 수 있어요.")
         return
 
-    # Pretendard가 설치돼 있지 않으면 fonts 폴더에 한 번 받아 두고, 이 프로그램 안에서만 쓰도록 불러온다
-    if FONT not in tkfont.families(root) and not FONT_FILE.exists():
-        download_font()
-    if FONT_FILE.exists():
-        ctypes.windll.gdi32.AddFontResourceExW(str(FONT_FILE), 0x10, 0)  # FR_PRIVATE
+    # Pretendard(Bold·SemiBold)가 설치돼 있지 않으면 fonts 폴더에 한 번 받아 두고, 이 프로그램 안에서만 쓰도록 불러온다
+    installed = set(tkfont.families(root))
+    for name, family in FONT_FILES.items():
+        font_file = FONT_DIR / name
+        if family not in installed and not font_file.exists():
+            download_font(name)
+        if font_file.exists():
+            ctypes.windll.gdi32.AddFontResourceExW(str(font_file), 0x10, 0)  # FR_PRIVATE
 
     first_run = not CONFIG_FILE.exists()
     events = queue.Queue()

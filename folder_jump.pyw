@@ -7,6 +7,7 @@ import re
 import subprocess
 import sys
 import threading
+import time
 import tkinter as tk
 import tkinter.font as tkfont
 import urllib.request
@@ -58,7 +59,10 @@ THEMES = {
 # 테마 고르기 카드의 미리보기 색: (배경, 테두리, 막대1, 강조 막대, 막대3)
 PREVIEWS = {"dark": ("#141416", "#34343B", "#4A4A52", "#3A3020", "#2E2E34"),
             "light": ("#FBFBFA", "#DEDEE3", "#C9C9CF", "#FADFAA", "#E4E4E7")}
-DEFAULTS = {"hotkey": [MOD_ALT, 0xC0], "theme": "dark", "folders": []}
+DEFAULTS = {"hotkey": [MOD_ALT, 0xC0], "theme": "dark", "folders": [], "recent_docs": True}
+# 최근 문서 패널: (Office 앱, 배지 글자, 배지 색)
+OFFICE_APPS = (("Word", "W", "#2B579A"), ("Excel", "X", "#217346"))
+MAX_DOCS = 8
 
 user32 = ctypes.windll.user32
 kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
@@ -111,10 +115,72 @@ def shell_path(text):
 def open_in_explorer(path):
     """이 프로그램에서 보이는 폴더는 바로 열고, 안 보이는 경로는 탐색기에 맡긴다.
     cloudium 같은 보안 가상 드라이브는 탐색기 등 허용된 프로그램에서만 열려서 파이썬에서는 안 보인다."""
-    if URL.match(path) or os.path.isdir(path):  # 웹 주소는 기본 브라우저로 열린다
+    if URL.match(path) or os.path.exists(path):  # 웹 주소는 기본 브라우저로, 파일은 연결된 프로그램으로 열린다
         os.startfile(path)
     else:
         subprocess.Popen(["explorer.exe", path])
+
+
+MRU_ITEM = re.compile(r"\[T([0-9A-F]+)\].*?\*(.+)$", re.I)  # [F..][T<FILETIME>][O..]*경로
+
+
+def _reg_names(path, enum):
+    """레지스트리 키의 하위 키(winreg.EnumKey) 또는 값(winreg.EnumValue)을 차례로 돌려준다."""
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, path) as key:
+            i = 0
+            while True:
+                try:
+                    yield enum(key, i)
+                except OSError:
+                    return
+                i += 1
+    except OSError:
+        return
+
+
+def recent_office_files():
+    """Word·Excel이 각자 '최근 항목'에 기록한 문서를 최신순으로 돌려준다 (로그인 계정별 목록을 합친다)."""
+    found = {}
+    for app, badge, color in OFFICE_APPS:
+        base = rf"Software\Microsoft\Office\16.0\{app}"
+        mru_keys = [rf"{base}\File MRU"] + [rf"{base}\User MRU\{who}\File MRU"
+                                            for who in _reg_names(rf"{base}\User MRU", winreg.EnumKey)]
+        for mru in mru_keys:
+            for name, value, _ in _reg_names(mru, winreg.EnumValue):
+                m = MRU_ITEM.search(str(value)) if name.startswith("Item ") else None
+                if not m:
+                    continue
+                ts, path = int(m[1], 16), m[2]
+                if path.lower() not in found or found[path.lower()]["ts"] < ts:
+                    found[path.lower()] = {"name": Path(path).name, "path": path, "ts": ts,
+                                           "badge": badge, "color": color}
+    docs = []
+    for doc in sorted(found.values(), key=lambda d: -d["ts"]):
+        path = doc["path"]
+        # 보이는 드라이브에서 지워진 파일은 뺀다. 웹 주소·네트워크 경로(꺼진 서버면 확인이 오래 걸림)와
+        # cloudium처럼 안 보이는 드라이브는 확인하지 않고 둔다.
+        if URL.match(path) or path.startswith("\\\\") or not os.path.exists(path[:3]) or os.path.exists(path):
+            docs.append(doc)
+        if len(docs) == 50:
+            break
+    return docs
+
+
+def time_ago(filetime):
+    seconds = time.time() - (filetime / 1e7 - 11644473600)  # FILETIME(1601년 기준 100ns) → 유닉스 시간
+    if seconds < 60:
+        return "방금"
+    if seconds < 3600:
+        return f"{int(seconds // 60)}분 전"
+    if seconds < 86400:
+        return f"{int(seconds // 3600)}시간 전"
+    if seconds < 86400 * 2:
+        return "어제"
+    if seconds < 86400 * 7:
+        return f"{int(seconds // 86400)}일 전"
+    t = time.localtime(filetime / 1e7 - 11644473600)
+    return f"{t.tm_mon}월 {t.tm_mday}일"
 
 
 def download_font():
@@ -384,6 +450,8 @@ class App:
         self.cv.pack(fill="both", expand=True)
         self.query = tk.StringVar()
         self.renaming = None  # 이름을 고치는 중인 줄 번호
+        self.zone, self.dsel = "fav", 0  # 선택 중인 목록(즐겨찾기 "fav" / 최근 문서 "docs")과 최근 문서 선택 줄
+        self.all_docs = recent_office_files() if self.cfg["recent_docs"] else []
 
         # 검색창 없이 팝업에서 바로 입력받는다. 입력한 글자는 목록 머리 줄에 보인다.
         e = self.cv
@@ -395,6 +463,9 @@ class App:
         e.bind("<Escape>", lambda ev: self.query.set("") if self.query.get() else self.hide())
         e.bind("<Down>", lambda ev: self.move(1))
         e.bind("<Up>", lambda ev: self.move(-1))
+        e.bind("<Tab>", lambda ev: self.switch_zone("docs" if self.zone == "fav" else "fav"))
+        e.bind("<Left>", lambda ev: self.switch_zone("fav"))
+        e.bind("<Right>", lambda ev: self.switch_zone("docs"))
         e.bind("<Control-d>", lambda ev: self.quick_add())
         e.bind("<F2>", lambda ev: self.start_rename())
         e.bind("<Control-comma>", lambda ev: self.open_settings())
@@ -433,26 +504,50 @@ class App:
                           for f in filter_folders(self.cfg["folders"], q)]
             self.header = "즐겨찾기"
             self.count = f"{len(self.items)}개" if q.strip() else f"입력해서 검색 · {len(self.items)}개"
-        self.sel = self.offset = 0
+        self.docs = [] if self.typed else filter_folders(self.all_docs, q)[:MAX_DOCS]
+        self.sel = self.offset = self.dsel = 0
+        if self.zone == "docs" and not self.docs:  # 비어 있는 목록에 머무르지 않게 한다
+            self.zone = "fav"
+        elif self.zone == "fav" and not self.items and self.docs:
+            self.zone = "docs"
         self.cv.hover = None
         self.cv.redraw()
 
+    def switch_zone(self, zone):
+        if self.renaming is None and (zone == "fav" or self.docs):
+            self.zone = zone
+            self.cv.hover = None
+            self.cv.redraw()
+        return "break"
+
+    def open_doc(self, i):
+        open_in_explorer(self.docs[i]["path"])
+        self.hide()
+
     def draw_popup(self, cv):
         c, f, p = self.c, self.f, self.px
-        if self.renaming is None and cv.hover and cv.hover.startswith("row:"):  # 마우스를 올린 줄이 선택된다
-            self.sel = self.offset + int(cv.hover[4:])
-        W = p(680)
+        if self.renaming is None and cv.hover:  # 마우스를 올린 줄이 선택된다
+            if cv.hover.startswith("row:"):
+                self.zone, self.sel = "fav", self.offset + int(cv.hover[4:])
+            elif cv.hover.startswith("doc:"):
+                self.zone, self.dsel = "docs", int(cv.hover[4:])
+        side = self.cfg["recent_docs"]
+        MW, SW = p(680), p(340)  # 즐겨찾기 영역 폭, 최근 문서 패널 폭
+        W = MW + (SW if side else 0)
         n = min(len(self.items), MAX_ROWS)
         list_h = n * p(56) + max(n - 1, 0) * p(2) + p(10) if n else p(64)
-        H = p(44) + list_h + p(44)
+        nd = len(self.docs)
+        docs_h = nd * p(50) + max(nd - 1, 0) * p(2) + p(10) if nd else p(64)
+        H = p(44) + max(list_h, docs_h if side else 0) + p(44)
         cv.configure(width=W, height=H)
+        fy = H - p(44)
 
         # 머리 줄: 입력 중이면 입력한 글자, 아니면 "즐겨찾기"
         q = self.query.get()
-        cv.text(W - p(20), p(24), self.count, anchor="e", font=f["sm"], fill=c["sub"])
+        cv.text(MW - p(20), p(24), self.count, anchor="e", font=f["sm"], fill=c["sub"])
         if q:
             font = f["mono_md"] if self.typed else f["lgb"]
-            avail = W - p(40) - p(20) - f["sm"].measure(self.count) - p(16)
+            avail = MW - p(40) - p(20) - f["sm"].measure(self.count) - p(16)
             cv.text(p(20), p(24), I_SEARCH, anchor="w", font=f["icon14"], fill=c["accent"])
             cv.text(p(42), p(24), ellipsize(font, q, avail), anchor="w", font=font, fill=c["text"])
         else:
@@ -462,14 +557,14 @@ class App:
         y0 = p(44)
         for i in range(n):
             k = self.offset + i
-            item, sel = self.items[k], k == self.sel
+            item, sel = self.items[k], k == self.sel and self.zone == "fav"
             y = y0 + i * (p(56) + p(2))
             if sel:
-                cv.rrect(p(8), y, W - p(8), y + p(56), p(10), fill=c["sel"])
+                cv.rrect(p(8), y, MW - p(8), y + p(56), p(10), fill=c["sel"])
             cv.rrect(p(20), y + p(10), p(56), y + p(46), p(9), fill=c["tile_sel"] if sel else c["tile"])
             glyph = {"folder": I_FOLDER, "open": I_FOLDER_OPEN, "add": I_STAR}[item["kind"]]
             cv.text(p(38), y + p(28), glyph, font=f["icon18"], fill=c["accent"] if sel else c["sub"])
-            right = W - p(20)
+            right = MW - p(20)
             if sel and item["kind"] == "add":
                 right = self.keycap(cv, right, y + p(28), "Ctrl D", fg=c["text2"]) - p(12)
             elif sel:
@@ -490,18 +585,41 @@ class App:
             else:
                 cv.text(p(70), y + p(19), ellipsize(f["name"], item["title"], avail), anchor="w", font=f["name"], fill=c["text"])
             cv.text(p(70), y + p(38), ellipsize(sub_font, item["sub"], avail), anchor="w", font=sub_font, fill=c["sub"])
-            cv.hit(f"row:{i}", (p(8), y, W - p(8), y + p(56)), lambda k=k: self.activate(k))
+            cv.hit(f"row:{i}", (p(8), y, MW - p(8), y + p(56)), lambda k=k: self.activate(k))
         if not n:
             msg = ("즐겨찾기가 비어 있어요 · Ctrl+D로 폴더를 추가하세요" if not self.cfg["folders"]
                    else "일치하는 폴더가 없어요")
-            cv.text(W / 2, y0 + p(24), msg, font=f["md"], fill=c["sub"])
+            cv.text(MW / 2, y0 + p(24), msg, font=f["md"], fill=c["sub"])
+
+        # 오른쪽 패널: Word·Excel 최근 문서
+        if side:
+            sx = MW
+            cv.line(sx, 0, sx, fy, fill=c["line"])
+            cv.text(sx + p(20), p(24), "최근 문서", anchor="w", font=f["sm"], fill=c["sub"])
+            cv.text(W - p(20), p(24), "Word · Excel", anchor="e", font=f["sm"], fill=c["sub2"])
+            for i, doc in enumerate(self.docs):
+                y = y0 + i * (p(50) + p(2))
+                if self.zone == "docs" and i == self.dsel:
+                    cv.rrect(sx + p(8), y, W - p(8), y + p(50), p(10), fill=c["sel"])
+                cv.rrect(sx + p(18), y + p(10), sx + p(48), y + p(40), p(7), fill=doc["color"])
+                cv.text(sx + p(33), y + p(25), doc["badge"], font=f["mdb"], fill="#FFFFFF")
+                avail = W - p(20) - sx - p(60)
+                folder = Path(doc["path"]).parent.name or doc["path"]
+                cv.text(sx + p(60), y + p(16), ellipsize(f["md"], doc["name"], avail), anchor="w",
+                        font=f["md"], fill=c["text"])
+                cv.text(sx + p(60), y + p(35), ellipsize(f["sm"], f"{time_ago(doc['ts'])} · {folder}", avail),
+                        anchor="w", font=f["sm"], fill=c["sub"])
+                cv.hit(f"doc:{i}", (sx + p(8), y, W - p(8), y + p(50)), lambda i=i: self.open_doc(i))
+            if not nd:
+                msg = "일치하는 문서가 없어요" if self.all_docs else "최근에 연 Word·Excel 문서가 없어요"
+                cv.text(sx + SW / 2, y0 + p(24), msg, font=f["md"], fill=c["sub"])
 
         # 아래 안내 줄
-        fy = H - p(44)
         cv.box(0, fy, W, H, fill=c["footer"])
         cv.line(0, fy, W, fy, fill=c["line"])
         x = p(20)
-        for key, label in (("↑↓", "이동"), ("F2", "이름 변경"), ("Ctrl D", "추가"), ("Esc", "닫기")):
+        hints = (("↑↓", "이동"), ("Tab", "최근 문서"), ("F2", "이름 변경"), ("Ctrl D", "추가"), ("Esc", "닫기"))
+        for key, label in hints if side else hints[:1] + hints[2:]:
             x = self.keycap(cv, x, fy + p(22), key, fg=c["text2"], fill=c["footer"], h=22, r=5, right=False) + p(6)
             cv.text(x, fy + p(22), label, anchor="w", font=f["sm"], fill=c["sub"])
             x += f["sm"].measure(label) + p(16)
@@ -525,7 +643,8 @@ class App:
 
     def start_rename(self):
         """선택한 즐겨찾기의 이름 자리를 입력칸으로 바꾼다. Enter 저장, Esc 취소."""
-        if self.renaming is not None or not self.items or self.items[self.sel]["kind"] != "folder":
+        if (self.renaming is not None or self.zone != "fav" or not self.items
+                or self.items[self.sel]["kind"] != "folder"):
             return "break"
         self.renaming = self.sel
         c = self.c
@@ -570,7 +689,11 @@ class App:
     def move(self, step):
         if self.renaming is not None:
             return "break"
-        if self.items:
+        if self.zone == "docs":
+            self.dsel = max(0, min(len(self.docs) - 1, self.dsel + step))
+            self.cv.hover = None
+            self.cv.redraw()
+        elif self.items:
             self.sel = max(0, min(len(self.items) - 1, self.sel + step))
             if self.sel < self.offset:
                 self.offset = self.sel
@@ -588,6 +711,9 @@ class App:
         self.open_selected()
 
     def open_selected(self):
+        if self.zone == "docs":
+            self.open_doc(self.dsel)
+            return
         if not self.items:
             return
         item = self.items[self.sel]
@@ -630,6 +756,8 @@ class App:
 
     def show(self):
         self.visible = True
+        self.zone = "fav"
+        self.all_docs = recent_office_files() if self.cfg["recent_docs"] else []  # 열 때마다 새로 읽는다
         self.query.set("")
         self.root.deiconify()
         self.cv.redraw()
@@ -680,7 +808,7 @@ class App:
         self.fav_scroll = 0
         self.autostart = autostart_enabled()
 
-        W, H = p(760), p(500)
+        W, H = p(760), p(540)
         self.nav = Surface(s, self.draw_nav, width=p(184), height=H)
         self.nav.pack(side="left", fill="y")
         self.main = Surface(s, self.draw_main, width=W - p(184), height=H)
@@ -730,7 +858,7 @@ class App:
 
     def draw_nav(self, cv):
         c, f, p = self.c, self.f, self.px
-        W, H = p(184), p(500)
+        W, H = p(184), p(540)
         cv.line(W - 1, 0, W - 1, H, fill=c["line2"])
         for i, (key, label, icon) in enumerate((("fav", "즐겨찾기", I_FOLDER), ("general", "일반", I_GEAR))):
             y = p(16) + i * p(44)
@@ -939,6 +1067,16 @@ class App:
         cv.oval(kx - p(10), cy - p(10), kx + p(10), cy + p(10), fill=c["knob"])
         cv.hit("auto", (x1, y, x2, y + h), self.toggle_autostart)
 
+        # 최근 문서 패널
+        on = self.cfg["recent_docs"]
+        y, h = y + h + p(14), p(80)
+        self.card(cv, x1, y, x2, y + h, "최근 Word·Excel 문서 보이기", "팝업 오른쪽에 최근에 연 문서를 보여줘요")
+        cy = y + h / 2
+        cv.rrect(sx1, cy - p(13), sx2, cy + p(13), p(13), fill=c["accent_fill"] if on else c["switch_off"])
+        kx = sx2 - p(13) if on else sx1 + p(13)
+        cv.oval(kx - p(10), cy - p(10), kx + p(10), cy + p(10), fill=c["knob"])
+        cv.hit("recent", (x1, y, x2, y + h), self.toggle_recent_docs)
+
     def capture_hotkey(self):
         self.capturing = True
         self.hk_error = None
@@ -986,6 +1124,13 @@ class App:
     def toggle_autostart(self):
         set_autostart(not self.autostart)
         self.autostart = autostart_enabled()
+        self.main.redraw()
+
+    def toggle_recent_docs(self):
+        self.cfg["recent_docs"] = not self.cfg["recent_docs"]
+        self.save()
+        self.all_docs = recent_office_files() if self.cfg["recent_docs"] else []
+        self.on_query()
         self.main.redraw()
 
 

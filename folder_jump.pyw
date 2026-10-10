@@ -19,8 +19,23 @@ from tkinter import filedialog, messagebox
 APP = "폴더 바로가기"
 FROZEN = getattr(sys, "frozen", False)  # PyInstaller로 만든 exe로 실행 중인지
 HERE = Path(sys.executable if FROZEN else __file__).resolve().parent
-# exe는 실행할 때마다 임시 폴더에 풀리므로 설정·폰트를 %APPDATA%에 둔다. 스크립트는 파일 옆에 둔다.
-DATA_DIR = Path(os.environ["APPDATA"]) / "FolderJumper" if FROZEN else HERE
+
+
+def writable(folder):
+    """폴더에 파일을 실제로 만들어 보고 쓸 수 있는지 확인한다.
+    os.access는 윈도우 권한을 제대로 못 보고, tempfile은 권한 오류를 이름 충돌로 여겨 끝없이 다시 시도한다."""
+    probe = folder / f".write_test_{os.getpid()}"
+    try:
+        probe.touch()
+        probe.unlink()
+        return True
+    except OSError:
+        return False
+
+
+# exe는 실행할 때마다 임시 폴더에 풀리고, 스크립트도 C:\ 나 Program Files처럼 일반 사용자가 못 쓰는 곳에
+# 둘 수 있어서 그럴 때는 설정·폰트를 %APPDATA%에 둔다. 그 밖의 스크립트는 파일 옆에 둔다.
+DATA_DIR = Path(os.environ["APPDATA"]) / "FolderJumper" if FROZEN or not writable(HERE) else HERE
 CONFIG_FILE = DATA_DIR / "settings.json"
 FONT_DIR = DATA_DIR / "fonts"
 FONT_FILES = {"Pretendard-Bold.otf": "Pretendard", "Pretendard-SemiBold.otf": "Pretendard SemiBold"}  # 파일: 글꼴 이름

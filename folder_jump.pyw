@@ -536,7 +536,7 @@ class App:
             elif cv.hover.startswith("doc:"):
                 self.zone, self.dsel = "docs", int(cv.hover[4:])
         side = self.cfg["recent_docs"]
-        MW, SW = p(680), p(340)  # 즐겨찾기 영역 폭, 최근 문서 패널 폭
+        MW, SW = p(600), p(420)  # 즐겨찾기 영역 폭, 최근 문서 패널 폭
         W = MW + (SW if side else 0)
         n = min(len(self.items), MAX_ROWS)
         list_h = n * p(56) + max(n - 1, 0) * p(2) + p(10) if n else p(64)
